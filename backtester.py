@@ -2,48 +2,65 @@ import yfinance as yf
 import datetime as dt
 import pandas as pd
 import numpy as np
+import tensorflow as tf
 from strategies import add_technical_indicators
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow import keras
 from keras.models import Sequential
-from keras.layers import LSTM, Dense
+from keras.layers import LSTM, Dense, Dropout
+from keras.optimizers import Adam
 from sklearn.metrics import mean_squared_error
+import matplotlib.pyplot as plt
 
-now = dt.datetime.now()
-stock = input("Enter Ticker: ")
-print(stock)
 
-start = dt.datetime(2022, 1, 1)
-df = yf.download(stock, start, now)
+# Function to download and preprocess stock data
+def download_and_preprocess(ticker, start, end, indicators):
+    df = yf.download(ticker, start, end)
+    df = add_technical_indicators(df, indicators)
+    df.drop(["Open", "High", "Low", "Adj Close"], axis=1, inplace=True)
+    df["Next_Close"] = df["Close"].shift(-1)
+    df = df.dropna()
+    return df
 
-# fig, ax = plt.subplots()
-# mpf.plot(df, ax=ax, type="candle", style="charles", ylabel="Price ($)")
-# ax.set_title(f"Candlestick chart for {stock}")
-# plt.show()
 
-# st_lt_ema(stock, df, [12, 16], [50, 200])
+def custom_loss(y_true, y_pred):
+    squared_error = tf.square(y_true - y_pred)
+    overestimate_penalty = tf.where(
+        y_pred > y_true, squared_error * 1, squared_error
+    )
+    return tf.reduce_mean(overestimate_penalty)
 
+
+# Define the technical indicators
 indicators = {
-    "rsi": {
-        "period": 14,
-        "average_type": "ema",
-    },
-    "bollinger_bands": {
-        "period": 20,
-        "num_std_dev": 2,
-    },
-    "macd": {
-        "fast_period": 12,
-        "slow_period": 26,
-        "signal_period": 9,
-    },
+    "rsi": {"period": 14, "average_type": "ema"},
+    "bollinger_bands": {"period": 20, "num_std_dev": 2},
+    "macd": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
     "emas": [12, 16, 50, 200],
 }
 
-df = add_technical_indicators(df, indicators)
-df.drop(["Open", "High", "Low", "Adj Close"], axis=1, inplace=True)
-df["Next_Close"] = df["Close"].shift(-1)
-df = df.dropna()
+# Define the tickers to train on and the prediction ticker
+train_tickers = [
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "MARA",
+    "NVDA",
+    "COST",
+]  # Add more tickers as needed
+predict_ticker = "MARA"
+
+start = dt.datetime(2020, 1, 1)
+end = dt.datetime.now()
+
+# Download and preprocess data for each ticker
+df_list = [
+    download_and_preprocess(ticker, start, end, indicators)
+    for ticker in train_tickers
+]
+
+# Concatenate all dataframes
+df = pd.concat(df_list, axis=0)
 
 # Initialize separate scalers for features and the target
 features_scaler = MinMaxScaler()
@@ -82,81 +99,108 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
 
 
 # Assuming you use 3 days of past data to predict the next close
-n_input = 3
-df_prepared = series_to_supervised(df, n_in=n_input)
+n_input = 2
+df_prepared = series_to_supervised(df, n_in=n_input, n_out=1)
+
+# Extract dates from the original data
+dates = df.index[n_input:]
 
 # Split into input and outputs
 n_obs = n_input * len(df.columns)
-train_X, train_y = (
-    df_prepared.values[:, :n_obs],
-    df_prepared.values[:, -1],
-)  # assuming the last column is 'Next_Close(t)'
-test_X, test_y = df_prepared.values[:, :n_obs], df_prepared.values[:, -1]
+X, y = df_prepared.values[:, :n_obs], df_prepared.values[:, -1]
 
 # Reshape input to be 3D [samples, timesteps, features] as required by LSTM
-train_X = train_X.reshape((train_X.shape[0], n_input, len(df.columns)))
-test_X = test_X.reshape((test_X.shape[0], n_input, len(df.columns)))
+X = X.reshape((X.shape[0], n_input, len(df.columns)))
+
+# Split into training and testing sets
+train_size = int(len(X) * 0.8)
+train_X, test_X = X[:train_size], X[train_size:]
+train_y, test_y = y[:train_size], y[train_size:]
 
 model = Sequential()
-model.add(LSTM(50, input_shape=(train_X.shape[1], train_X.shape[2])))
-model.add(Dense(1))
-model.compile(optimizer="adam", loss="mean_squared_error")
+model.add(
+    LSTM(
+        50,
+        input_shape=(train_X.shape[1], train_X.shape[2]),
+        return_sequences=True,
+    )
+)
+model.add(Dropout(0.2))
+model.add(LSTM(units=50, return_sequences=True))
+model.add(Dropout(0.2))
+model.add(LSTM(units=50, return_sequences=True))
+model.add(Dropout(0.2))
+model.add(LSTM(units=50))
+model.add(Dropout(0.2))
+model.add(Dense(units=1))
+model.compile(optimizer=Adam(learning_rate=0.005), loss=custom_loss)
 
 # Train the model
 history = model.fit(
     train_X,
     train_y,
     epochs=50,
-    batch_size=72,
+    batch_size=64,
     validation_data=(test_X, test_y),
     verbose=2,
 )
 
-# Make a prediction
-yhat = model.predict(test_X)
+pred_start = dt.datetime(2024, 1, 1)
+
+
+# Download and preprocess data for the prediction ticker
+df_predict = download_and_preprocess(
+    predict_ticker, pred_start, end, indicators
+)
+
+# Scale the features and target
+df_predict[feature_columns] = features_scaler.transform(
+    df_predict[feature_columns]
+)
+df_predict[["Next_Close"]] = target_scaler.transform(
+    df_predict[["Next_Close"]]
+)
+
+# Prepare the data for prediction
+df_predict_prepared = series_to_supervised(df_predict, n_in=n_input, n_out=1)
+
+# Extract dates for the prediction ticker
+dates_predict = df_predict.index[n_input:]
+
+# Split into input and outputs
+predict_X, predict_y = (
+    df_predict_prepared.values[:, :n_obs],
+    df_predict_prepared.values[:, -1],
+)
+
+# Reshape input to be 3D [samples, timesteps, features] as required by LSTM
+predict_X = predict_X.reshape((predict_X.shape[0], n_input, len(df.columns)))
+
+# Make predictions
+yhat = model.predict(predict_X)
 
 # Inverse transform to revert the scaling
 yhat_inverse = target_scaler.inverse_transform(yhat.reshape(-1, 1))
-test_y_inverse = target_scaler.inverse_transform(test_y.reshape(-1, 1))
+predict_y_inverse = target_scaler.inverse_transform(predict_y.reshape(-1, 1))
 
-# Calculate RMSE
-rmse = np.sqrt(mean_squared_error(test_y_inverse, yhat_inverse))
-print("Test RMSE: %.3f" % rmse)
+# Shift the predicted values by one day to align with actual values
+yhat_inverse_shifted = np.roll(yhat_inverse, 1)
+yhat_inverse_shifted[0] = (
+    np.nan
+)  # Set the first value to NaN as it has no corresponding actual value
 
-
-# Predictions on training data
-train_pred = model.predict(train_X)
-
-# Predictions on validation (test) data
-test_pred = model.predict(test_X)
-
-# Inverse transform predictions
-train_pred_inverse = target_scaler.inverse_transform(train_pred)
-test_pred_inverse = target_scaler.inverse_transform(test_pred)
-
-# Inverse transform actual values
-train_y_inverse = target_scaler.inverse_transform(train_y.reshape(-1, 1))
-test_y_inverse = target_scaler.inverse_transform(test_y.reshape(-1, 1))
-
-import matplotlib.pyplot as plt
-
-# Plotting the training predictions
-plt.figure(figsize=(15, 5))
-plt.subplot(1, 2, 1)
-plt.plot(train_y_inverse, label="Actual Training Data")
-plt.plot(train_pred_inverse, label="Predicted Training Data")
-plt.title("Comparison of Actual and Predicted - Training Data")
-plt.xlabel("Time")
-plt.ylabel("Stock Price")
-plt.legend()
+# Calculate RMSE for the prediction ticker, excluding the first shifted value
+rmse = np.sqrt(
+    mean_squared_error(predict_y_inverse[1:], yhat_inverse_shifted[1:])
+)
+print(f"Prediction RMSE for {predict_ticker}: %.3f" % rmse)
 
 # Plotting the validation predictions
-plt.subplot(1, 2, 2)
-plt.plot(test_y_inverse, label="Actual Validation Data")
-plt.plot(test_pred_inverse, label="Predicted Validation Data")
-plt.title("Comparison of Actual and Predicted - Validation Data")
+plt.figure(figsize=(15, 5))
+plt.plot(dates_predict, predict_y_inverse, label="Actual Data")
+plt.plot(dates_predict, yhat_inverse_shifted, label="Predicted Data")
+plt.title(f"Comparison of Actual and Predicted - {predict_ticker}")
 plt.xlabel("Time")
 plt.ylabel("Stock Price")
 plt.legend()
-
-plt.show()
+plt.savefig("test.png")
