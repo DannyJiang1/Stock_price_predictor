@@ -3,20 +3,21 @@ import datetime as dt
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from strategies import add_technical_indicators
+from sklearn.model_selection import train_test_split
+from strategies import add_technical_indicators, add_macroeconomic_indicators
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow import keras
-from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout
 from keras.optimizers import Adam
 from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
+from utils import hyperparameter_tuning, architecture_tuning, build_model
 
 
 # Function to download and preprocess stock data
 def download_and_preprocess(ticker, start, end, indicators):
     df = yf.download(ticker, start, end)
     df = add_technical_indicators(df, indicators)
+    df = add_macroeconomic_indicators(df, indicators, start, end)
     df.drop(["Open", "High", "Low", "Adj Close"], axis=1, inplace=True)
     df["Next_Close"] = df["Close"].shift(-1)
     df = df.dropna()
@@ -37,18 +38,16 @@ indicators = {
     "bollinger_bands": {"period": 20, "num_std_dev": 2},
     "macd": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
     "emas": [12, 16, 50, 200],
+    "vix": True,
+    "interest_rate": "EFFR",
+    "unemployment_rate": "UNRATE",
+    "consumer_sentiment": "UMCSENT",
+    "us_dollar_index": True,
 }
 
 # Define the tickers to train on and the prediction ticker
-train_tickers = [
-    "AAPL",
-    "MSFT",
-    "GOOGL",
-    "MARA",
-    "NVDA",
-    "COST",
-]  # Add more tickers as needed
-predict_ticker = "MARA"
+train_tickers = ["SPY"]  # Add more tickers as needed
+predict_ticker = "SPY"
 
 start = dt.datetime(2020, 1, 1)
 end = dt.datetime.now()
@@ -98,8 +97,8 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
     return agg
 
 
-# Assuming you use 3 days of past data to predict the next close
-n_input = 2
+# Increase the number of past timesteps to use for prediction
+n_input = 5
 df_prepared = series_to_supervised(df, n_in=n_input, n_out=1)
 
 # Extract dates from the original data
@@ -112,41 +111,54 @@ X, y = df_prepared.values[:, :n_obs], df_prepared.values[:, -1]
 # Reshape input to be 3D [samples, timesteps, features] as required by LSTM
 X = X.reshape((X.shape[0], n_input, len(df.columns)))
 
-# Split into training and testing sets
-train_size = int(len(X) * 0.8)
-train_X, test_X = X[:train_size], X[train_size:]
-train_y, test_y = y[:train_size], y[train_size:]
+optimizers = ["Adam"]
+learning_rates = [0.001, 0.01, 0.1]
+batch_sizes = [32, 64]
 
-model = Sequential()
-model.add(
-    LSTM(
-        50,
-        input_shape=(train_X.shape[1], train_X.shape[2]),
-        return_sequences=True,
-    )
+
+train_X, test_X, train_Y, test_Y = train_test_split(
+    X, y, test_size=0.2, random_state=42
 )
-model.add(Dropout(0.2))
-model.add(LSTM(units=50, return_sequences=True))
-model.add(Dropout(0.2))
-model.add(LSTM(units=50, return_sequences=True))
-model.add(Dropout(0.2))
-model.add(LSTM(units=50))
-model.add(Dropout(0.2))
-model.add(Dense(units=1))
-model.compile(optimizer=Adam(learning_rate=0.005), loss=custom_loss)
 
-# Train the model
-history = model.fit(
+train_X, val_X, train_Y, val_Y = train_test_split(
+    train_X, train_Y, test_size=0.25, random_state=42
+)
+
+# best_rmse, best_params = hyperparameter_tuning(
+#     optimizers, learning_rates, batch_sizes, train_X, val_X, train_Y, val_Y
+# )
+
+best_params = {
+    "optimizer": "Adam",
+    "learning_rate": 0.1,
+    "batch_size": 32,
+}
+
+layers_list = [[50], [50, 20]]
+
+best_architecture = architecture_tuning(
+    best_params, layers_list, train_X, test_X, train_Y, test_Y
+)
+
+model_spec = {
+    "layers": best_architecture,
+    "input_shape": (train_X.shape[1], train_X.shape[2]),
+    "optimizer": best_params["optimizer"],
+    "learning_rate": best_params["learning_rate"],
+    "loss": "mean_squared_error",
+}
+
+final_model = build_model(model_spec)
+history = final_model.fit(
     train_X,
-    train_y,
-    epochs=50,
-    batch_size=64,
-    validation_data=(test_X, test_y),
+    train_Y,
+    epochs=100,
+    batch_size=best_params["batch_size"],
+    validation_data=(test_X, test_Y),
     verbose=2,
 )
 
 pred_start = dt.datetime(2024, 1, 1)
-
 
 # Download and preprocess data for the prediction ticker
 df_predict = download_and_preprocess(
@@ -177,7 +189,7 @@ predict_X, predict_y = (
 predict_X = predict_X.reshape((predict_X.shape[0], n_input, len(df.columns)))
 
 # Make predictions
-yhat = model.predict(predict_X)
+yhat = final_model.predict(predict_X)
 
 # Inverse transform to revert the scaling
 yhat_inverse = target_scaler.inverse_transform(yhat.reshape(-1, 1))

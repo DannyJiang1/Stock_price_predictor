@@ -1,6 +1,8 @@
 import pandas as pd
 from typing import List
 import matplotlib.pyplot as plt
+import yfinance as yf
+from pandas_datareader import data as pdr
 from utils import print_stats
 
 # Future Indicators:
@@ -25,6 +27,45 @@ from utils import print_stats
     }
     emas: List[int]
 }"""
+
+
+def add_macroeconomic_indicators(df, indicators: dict, start, end):
+    if "vix" in indicators and indicators["vix"]:
+        vix_data = yf.download("^VIX", start=start, end=end)["Close"].rename(
+            "VIX"
+        )
+        df["VIX"] = vix_data.reindex(df.index, method="ffill")
+
+    if "interest_rate" in indicators and indicators["interest_rate"]:
+        ir_data = pdr.get_data_fred(
+            indicators["interest_rate"], start=start, end=end
+        ).rename(columns={indicators["interest_rate"]: "Interest Rate"})
+        df["Interest Rate"] = ir_data.reindex(df.index, method="ffill")
+
+    if "unemployment_rate" in indicators and indicators["unemployment_rate"]:
+        ur_data = pdr.get_data_fred(
+            indicators["unemployment_rate"], start=start, end=end
+        ).rename(
+            columns={indicators["unemployment_rate"]: "Unemployment Rate"}
+        )
+        df["Unemployment Rate"] = ur_data.reindex(df.index, method="ffill")
+
+    if "consumer_sentiment" in indicators and indicators["consumer_sentiment"]:
+        cs_data = pdr.get_data_fred(
+            indicators["consumer_sentiment"], start=start, end=end
+        ).rename(
+            columns={indicators["consumer_sentiment"]: "Consumer Sentiment"}
+        )
+        df["Consumer Sentiment"] = cs_data.reindex(df.index, method="ffill")
+
+    if "us_dollar_index" in indicators and indicators["us_dollar_index"]:
+        usd_data = yf.download("DX-Y.NYB", start=start, end=end)[
+            "Close"
+        ].rename("US Dollar Index")
+        df["US Dollar Index"] = usd_data.reindex(df.index, method="ffill")
+
+    df.fillna(method="bfill", inplace=True)
+    return df
 
 
 def add_technical_indicators(df, indicators: dict):
