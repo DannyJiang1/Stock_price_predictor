@@ -176,9 +176,9 @@ def train_and_evaluate(
     )
 
     val_predictions = model.predict(val_X)
-    print(val_predictions)
-    print("######################")
-    print(val_Y)
+    # print(val_predictions)
+    # print("######################")
+    # print(val_Y)
     val_rmse = np.sqrt(mean_squared_error(val_Y, val_predictions))
     return val_rmse
 

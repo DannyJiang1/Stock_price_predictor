@@ -49,7 +49,7 @@ indicators = {
 train_tickers = ["SPY"]  # Add more tickers as needed
 predict_ticker = "SPY"
 
-start = dt.datetime(2020, 1, 1)
+start = dt.datetime(2006, 1, 1)
 end = dt.datetime.now()
 
 # Download and preprocess data for each ticker
@@ -111,30 +111,30 @@ X, y = df_prepared.values[:, :n_obs], df_prepared.values[:, -1]
 # Reshape input to be 3D [samples, timesteps, features] as required by LSTM
 X = X.reshape((X.shape[0], n_input, len(df.columns)))
 
-optimizers = ["Adam"]
+optimizers = ["Adam", "Adagrad", "Nadam"]
 learning_rates = [0.001, 0.01, 0.1]
-batch_sizes = [32, 64]
+batch_sizes = [4, 8, 16]
 
 
 train_X, test_X, train_Y, test_Y = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-train_X, val_X, train_Y, val_Y = train_test_split(
+train_hypertune_X, val_X, train_hypertune_Y, val_Y = train_test_split(
     train_X, train_Y, test_size=0.25, random_state=42
 )
 
-# best_rmse, best_params = hyperparameter_tuning(
-#     optimizers, learning_rates, batch_sizes, train_X, val_X, train_Y, val_Y
-# )
+best_rmse, best_params = hyperparameter_tuning(
+    optimizers,
+    learning_rates,
+    batch_sizes,
+    train_hypertune_X,
+    val_X,
+    train_hypertune_Y,
+    val_Y,
+)
 
-best_params = {
-    "optimizer": "Adam",
-    "learning_rate": 0.1,
-    "batch_size": 32,
-}
-
-layers_list = [[50], [50, 20]]
+layers_list = [[10], [30], [50], [100], [150], [200]]
 
 best_architecture = architecture_tuning(
     best_params, layers_list, train_X, test_X, train_Y, test_Y
@@ -158,7 +158,7 @@ history = final_model.fit(
     verbose=2,
 )
 
-pred_start = dt.datetime(2024, 1, 1)
+pred_start = dt.datetime(2021, 1, 1)
 
 # Download and preprocess data for the prediction ticker
 df_predict = download_and_preprocess(
