@@ -15,18 +15,13 @@ import utils
 class Predictor:
     """Predict class."""
 
-    def train_and_save_model(
-        self, predict_ticker_in="SPY", train_tickers_in=["SPY"]
-    ):
+    def train_and_save_model(self, train_tickers_in=["SPY"]):
         """Train and save a new model given training and predicting tickers."""
         # Define the tickers to train on and the prediction ticker
         train_tickers = train_tickers_in
-        predict_ticker = predict_ticker_in
-
-        # Define the technical indicators
-        indicators = {
+        self.indicators = {
             "rsi": {"period": 14, "average_type": "ema"},
-            "bollinger_bands": {"period": 20, "num_std_dev": 2},
+            # "bollinger_bands": {"period": 20, "num_std_dev": 2},
             "macd": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
             "emas": [12, 16, 50, 200],
             "vix": True,
@@ -47,7 +42,7 @@ class Predictor:
 
         # Download and preprocess data for each ticker
         df_list = [
-            utils.download_and_preprocess(ticker, start, end, indicators)
+            utils.download_and_preprocess(ticker, start, end, self.indicators)
             for ticker in train_tickers
         ]
 
@@ -55,27 +50,33 @@ class Predictor:
         df = pd.concat(df_list, axis=0)
 
         # Initialize separate scalers for features and the target
-        features_scaler = MinMaxScaler()
-        target_scaler = MinMaxScaler()
+        self.features_scaler = MinMaxScaler()
+        self.target_scaler = MinMaxScaler()
 
         # Scale the features (all columns except 'Next_Close')
-        feature_columns = [col for col in df.columns if col != "Next_Close"]
-        df[feature_columns] = features_scaler.fit_transform(
-            df[feature_columns]
+        self.feature_columns = [
+            col for col in df.columns if col != "Next_Close"
+        ]
+        df[self.feature_columns] = self.features_scaler.fit_transform(
+            df[self.feature_columns]
         )
 
         # Scale the target ('Next_Close')
-        df[["Next_Close"]] = target_scaler.fit_transform(df[["Next_Close"]])
+        df[["Next_Close"]] = self.target_scaler.fit_transform(
+            df[["Next_Close"]]
+        )
 
         # Increase the number of past timesteps to use for prediction
-        n_input = 5
-        df_prepared = utils.series_to_supervised(df, n_in=n_input, n_out=1)
+        self.n_input = 5
+        df_prepared = utils.series_to_supervised(
+            df, n_in=self.n_input, n_out=1
+        )
 
         # Split into input and outputs
-        n_obs = n_input * len(df.columns)
-        X, y = df_prepared.values[:, :n_obs], df_prepared.values[:, -1]
+        self.n_obs = self.n_input * len(df.columns)
+        X, y = df_prepared.values[:, : self.n_obs], df_prepared.values[:, -1]
 
-        X = X.reshape((X.shape[0], n_input, len(df.columns)))
+        X = X.reshape((X.shape[0], self.n_input, len(df.columns)))
 
         train_x, test_x, train_y, test_y = train_test_split(
             X, y, test_size=0.2, random_state=42
@@ -86,12 +87,12 @@ class Predictor:
         )
 
         # Define the path to save/load the model
-        model_path = "final_model.h5"
+        self.model_path = "predictor_model.h5"
 
         # Check if the model already exists
-        if os.path.exists(model_path):
+        if os.path.exists(self.model_path):
             # Load the saved model
-            final_model = tf.keras.models.load_model(model_path)
+            print("predictor_model.h5 already exists.")
         else:
             # Hyperparamter Tuning
             _, best_params = utils.hyperparameter_tuning(
@@ -129,46 +130,55 @@ class Predictor:
             )
 
             # Save the trained model
-            final_model.save(model_path)
+            final_model.save(self.model_path)
 
+    def predict_price(self, predict_ticker):
+        if not os.path.exists(self.model_path):
+            print("No model present to use, training new model: ")
+            self.train_and_save_model(predict_ticker)
+
+        final_model = tf.keras.models.load_model(self.model_path)
         pred_start = dt.datetime(2021, 1, 1)
+        pred_end = dt.datetime.now()
 
         # Download and preprocess data for the prediction ticker
         df_predict = utils.download_and_preprocess(
-            predict_ticker, pred_start, end, indicators
+            predict_ticker, pred_start, pred_end, self.indicators
         )
         # Scale the features and target
-        df_predict[feature_columns] = features_scaler.transform(
-            df_predict[feature_columns]
+        df_predict[self.feature_columns] = self.features_scaler.transform(
+            df_predict[self.feature_columns]
         )
-        df_predict[["Next_Close"]] = target_scaler.transform(
+        df_predict[["Next_Close"]] = self.target_scaler.transform(
             df_predict[["Next_Close"]]
         )
 
         # Prepare the data for prediction
         df_predict_prepared = utils.series_to_supervised(
-            df_predict, n_in=n_input, n_out=1
+            df_predict, n_in=self.n_input, n_out=1
         )
 
         # Extract dates for the prediction ticker
-        dates_predict = df_predict.index[n_input:]
+        dates_predict = df_predict.index[self.n_input :]
 
         # Split into input and outputs
         predict_x, predict_y = (
-            df_predict_prepared.values[:, :n_obs],
+            df_predict_prepared.values[:, : self.n_obs],
             df_predict_prepared.values[:, -1],
         )
 
         predict_x = predict_x.reshape(
-            (predict_x.shape[0], n_input, len(df.columns))
+            (predict_x.shape[0], self.n_input, len(self.feature_columns))
         )
 
         # Make predictions
         yhat = final_model.predict(predict_x)
 
         # Inverse transform to revert the scaling
-        yhat_inverse = target_scaler.inverse_transform(yhat.reshape(-1, 1))
-        predict_y_inverse = target_scaler.inverse_transform(
+        yhat_inverse = self.target_scaler.inverse_transform(
+            yhat.reshape(-1, 1)
+        )
+        predict_y_inverse = self.target_scaler.inverse_transform(
             predict_y.reshape(-1, 1)
         )
 
@@ -194,6 +204,3 @@ class Predictor:
         plt.ylabel("Stock Price")
         plt.legend()
         plt.savefig("test.png")
-
-        model_path = "final_model.h5"
-        final_model.save(model_path)
