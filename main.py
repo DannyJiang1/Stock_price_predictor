@@ -1,13 +1,10 @@
-import os
 from predictor import Predictor
-import datetime as dt
-import utils
 
 
 def main():
-    predictor = Predictor()
+    predictor = Predictor("SPY_model")
 
-    # Train and save the model
+    # # Train and save the model
     train_tickers = ["SPY"]  # Example training tickers
     predictor.train_and_save_model(train_tickers)
 

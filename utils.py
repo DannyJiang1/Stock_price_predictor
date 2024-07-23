@@ -158,16 +158,21 @@ def download_and_preprocess(ticker, start, end, indicators):
     df["Next_Close"] = df["Close"].shift(-1)
     df = df.dropna()
     return df
+    # X = df.drop(["Next_Close"], axis=1)
+    # y = df["Next_Close"]
+    # return X, y
 
 
 def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
     n_vars = 1 if type(data) is list else data.shape[1]
     df = pd.DataFrame(data)
     cols, names = list(), list()
+
     # Input sequence (t-n, ... t-1)
     for i in range(n_in, 0, -1):
         cols.append(df.shift(i))
         names += [(df.columns[j] + "(t-%d)" % i) for j in range(n_vars)]
+
     # Forecast sequence (t, t+1, ... t+n)
     for i in range(0, n_out):
         cols.append(df.shift(-i))
@@ -175,13 +180,21 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
             names += [(df.columns[j] + "(t)") for j in range(n_vars)]
         else:
             names += [(df.columns[j] + "(t+%d)" % i) for j in range(n_vars)]
+
     # Concatenate all columns
     agg = pd.concat(cols, axis=1)
     agg.columns = names
+
     # Drop rows with NaN values
     if dropnan:
         agg.dropna(inplace=True)
-    return agg
+
+    # Separate features and labels
+    n_obs = n_in * n_vars
+    features = agg.iloc[:, :n_obs]
+    labels = agg.iloc[:, n_obs:]
+
+    return features, labels
 
 
 def build_model(model_spec):
