@@ -28,7 +28,7 @@ class Predictor:
         train_tickers = train_tickers_in
         self.indicators = {
             "rsi": {"period": 14, "average_type": "ema"},
-            "bollinger_bands": {"period": 20, "num_std_dev": 2},
+            # "bollinger_bands": {"period": 20, "num_std_dev": 2},
             "macd": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
             "emas": [12, 16, 50, 200],
             "vix": True,
@@ -79,7 +79,7 @@ class Predictor:
         self.n_obs = self.n_input * len(df.columns)
         X, y = X.values[:, : self.n_obs], y.values[:, 0]
 
-        X = X.reshape((X.shape[0], self.n_input, len(df.columns)))
+        X = X.reshape((X.shape[0], self.n_input, len(df.columns) - 1))
 
         train_x, test_x, train_y, test_y = train_test_split(
             X, y, test_size=0.2, random_state=42
@@ -156,7 +156,7 @@ class Predictor:
             with open(self.info_path, "w") as f:
                 json.dump(model_info, f, indent=4)
 
-    def predict_price(self, predict_ticker):
+    def predict_price(self, predict_ticker, graph=True):
         if not os.path.exists(self.model_path):
             print("No model present to use, training new model: ")
             self.train_and_save_model()
@@ -168,25 +168,24 @@ class Predictor:
 
         # Download and preprocess data for the prediction ticker
         df = utils.download_and_preprocess(
-            predict_ticker, pred_start, end, indicators
+            predict_ticker, pred_start, end, indicators, dropna=False
         )
+        print(df)
 
-        df[self.feature_columns] = self.features_scaler.fit_transform(
+        df[self.feature_columns] = self.features_scaler.transform(
             df[self.feature_columns]
         )
 
-        df[["Next_Close"]] = self.target_scaler.fit_transform(
-            df[["Next_Close"]]
-        )
+        df[["Next_Close"]] = self.target_scaler.transform(df[["Next_Close"]])
 
         X_predict, y_predict = utils.series_to_supervised(
-            df, n_in=self.n_input, n_out=1
+            df, n_in=self.n_input, n_out=1, keep_last=True
         )
 
-        dates_predict = X_predict.index[:]
+        dates_predict = X_predict.index[:-1]
 
         # Split into input and outputs
-        self.n_obs = self.n_input * len(df.columns)
+        self.n_obs = self.n_input * (len(df.columns) - 1)
 
         X_predict, y_predict = (
             X_predict.values[:, : self.n_obs],
@@ -194,7 +193,7 @@ class Predictor:
         )
 
         X_predict = X_predict.reshape(
-            (X_predict.shape[0], self.n_input, len(df.columns))
+            (X_predict.shape[0], self.n_input, len(df.columns) - 1)
         )
 
         # Make predictions
@@ -204,29 +203,34 @@ class Predictor:
         yhat_inverse = self.target_scaler.inverse_transform(
             yhat.reshape(-1, 1)
         )
-        y_predict_inverse = self.target_scaler.inverse_transform(
-            y_predict.reshape(-1, 1)
-        )
 
-        # Shift the predicted values by one day to align with actual values
-        yhat_inverse_shifted = np.roll(yhat_inverse, 1)
-        yhat_inverse_shifted[0] = (
-            np.nan
-        )  # Set the first value to NaN as it has no corresponding actual value
+        tomorrow_price_prediction = yhat_inverse[-1]
 
-        # Calculate RMSE for the prediction ticker
-        rmse = np.sqrt(
-            mean_squared_error(y_predict_inverse[1:], yhat_inverse_shifted[1:])
-        )
+        if graph and len(yhat_inverse) > 1:
+            y_predict = y_predict[:-1]
+            y_predict_inverse = self.target_scaler.inverse_transform(
+                y_predict.reshape(-1, 1)
+            )
+            # Shift the predicted values by one day to align with actual values
+            yhat_inverse_shifted = yhat_inverse[:-1]
 
-        print(f"Prediction RMSE for {predict_ticker}: %.3f" % rmse)
+            # Calculate RMSE for the prediction ticker
+            rmse = np.sqrt(
+                mean_squared_error(y_predict_inverse, yhat_inverse_shifted)
+            )
 
-        # Plotting the final predictions
-        plt.figure(figsize=(15, 5))
-        plt.plot(dates_predict, y_predict_inverse, label="Actual Data")
-        plt.plot(dates_predict, yhat_inverse_shifted, label="Predicted Data")
-        plt.title(f"Comparison of Actual and Predicted - {predict_ticker}")
-        plt.xlabel("Time")
-        plt.ylabel("Stock Price")
-        plt.legend()
-        plt.savefig(f"{predict_ticker}.png")
+            print(f"Prediction RMSE for {predict_ticker}: %.3f" % rmse)
+
+            # return dates_predict, y_predict_inverse, yhat_inverse_shifted
+
+            # Plotting the final predictions
+            plt.figure(figsize=(15, 5))
+            plt.plot(dates_predict, y_predict_inverse, label="Actual Data")
+            plt.plot(
+                dates_predict, yhat_inverse_shifted, label="Predicted Data"
+            )
+            plt.title(f"Comparison of Actual and Predicted - {predict_ticker}")
+            plt.xlabel("Time")
+            plt.ylabel("Stock Price")
+            plt.legend()
+            plt.savefig(f"{predict_ticker}.png")

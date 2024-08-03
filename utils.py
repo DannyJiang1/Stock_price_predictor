@@ -4,8 +4,9 @@ import tensorflow as tf
 import pandas_datareader as pdr
 import yfinance as yf
 import pandas as pd
+import datetime as dt
 from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout
+from keras.layers import LSTM, Dense
 from keras.optimizers import Adam, Adagrad, Nadam
 from sklearn.metrics import mean_squared_error
 
@@ -136,11 +137,13 @@ def bollinger_bands(df, period=20, num_std_dev=2):
 
 def macd(df, fast_period=12, slow_period=26, signal_period=9):
     # Calculate the fast and slow exponential moving averages
-    df["EMA_Fast"] = df["Close"].ewm(span=fast_period, adjust=False).mean()
-    df["EMA_Slow"] = df["Close"].ewm(span=slow_period, adjust=False).mean()
+    ema_fast = df["Close"].ewm(span=fast_period, adjust=False).mean()
+    ema_slow = df["Close"].ewm(span=slow_period, adjust=False).mean()
 
-    # Calculate the MACD line and Signal line
-    df["MACD"] = df["EMA_Fast"] - df["EMA_Slow"]
+    # Calculate the MACD line
+    df["MACD"] = ema_fast - ema_slow
+
+    # Calculate the Signal line
     df["Signal Line"] = df["MACD"].ewm(span=signal_period, adjust=False).mean()
 
 
@@ -149,48 +152,88 @@ def emas(df, emas: List[int]):
         df["Ema_" + str(ema)] = df["Close"].ewm(span=ema, adjust=False).mean()
 
 
+def get_max_period(indicators):
+    l = [0]
+    if "rsi" in indicators:
+        l.append(indicators["rsi"]["period"])
+    if "bollinger_bands" in indicators:
+        l.append(indicators["bollinger_bands"]["period"])
+    if "macd" in indicators:
+        l.append(indicators["macd"]["fast_period"])
+        l.append(indicators["macd"]["slow_period"])
+    if "emas" in indicators:
+        l = l + indicators["emas"]
+    max_period = max(l)
+    if (
+        "interest_rate" in indicators
+        or "unemployment_rate" in indicators
+        or "consumer_sentiment" in indicators
+    ):
+        max_period = max(max_period, 30)
+    return max_period
+
+
 # Function to download and preprocess stock data
-def download_and_preprocess(ticker, start, end, indicators):
+def download_and_preprocess(ticker, start, end, indicators, dropna=True):
     df = yf.download(ticker, start, end)
+    max_period = get_max_period(indicators)
+    original_start = start
+    if (end - start).days < max_period:
+        start = end - dt.timedelta(days=max_period + 1)
+        df = yf.download(ticker, start, end)
     df = add_technical_indicators(df, indicators)
     df = add_macroeconomic_indicators(df, indicators, start, end)
     df.drop(["Open", "High", "Low", "Adj Close"], axis=1, inplace=True)
     df["Next_Close"] = df["Close"].shift(-1)
-    df = df.dropna()
+    if dropna:
+        df = df.dropna()
+    df = df[df.index >= original_start]
     return df
-    # X = df.drop(["Next_Close"], axis=1)
-    # y = df["Next_Close"]
-    # return X, y
 
 
-def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
+def series_to_supervised(data, n_in=1, n_out=1, dropnan=True, keep_last=False):
     n_vars = 1 if type(data) is list else data.shape[1]
     df = pd.DataFrame(data)
+
+    # Separate features and labels
+    features_df = df.drop(columns=["Next_Close"])
+    labels_df = df[["Next_Close"]]
+
     cols, names = list(), list()
 
-    # Input sequence (t-n, ... t-1)
-    for i in range(n_in, 0, -1):
-        cols.append(df.shift(i))
-        names += [(df.columns[j] + "(t-%d)" % i) for j in range(n_vars)]
-
-    # Forecast sequence (t, t+1, ... t+n)
-    for i in range(0, n_out):
-        cols.append(df.shift(-i))
+    # Input sequence (t-n+1, ... t)
+    for i in range(n_in - 1, -1, -1):
+        cols.append(features_df.shift(i))
         if i == 0:
-            names += [(df.columns[j] + "(t)") for j in range(n_vars)]
+            names += [
+                (features_df.columns[j] + "(t)") for j in range(n_vars - 1)
+            ]
         else:
-            names += [(df.columns[j] + "(t+%d)" % i) for j in range(n_vars)]
+            names += [
+                (features_df.columns[j] + "(t-%d)" % i)
+                for j in range(n_vars - 1)
+            ]
+
+    # Forecast sequence (t+1)
+    for i in range(0, n_out):
+        cols.append(labels_df.shift(-i))
+        names += [(labels_df.columns[0] + "(t+%d)" % i)]
 
     # Concatenate all columns
     agg = pd.concat(cols, axis=1)
     agg.columns = names
 
-    # Drop rows with NaN values
-    if dropnan:
-        agg.dropna(inplace=True)
+    # Remove the last row before dropping NaN values
+    last_row = agg.iloc[-1]
+
+    if keep_last:
+        last_row_df = pd.DataFrame([last_row], columns=agg.columns)
+        if dropnan:
+            agg.dropna(inplace=True)
+        agg = pd.concat([agg, last_row_df], ignore_index=True)
 
     # Separate features and labels
-    n_obs = n_in * n_vars
+    n_obs = n_in * (n_vars - 1)
     features = agg.iloc[:, :n_obs]
     labels = agg.iloc[:, n_obs:]
 
