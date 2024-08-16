@@ -36,12 +36,14 @@ def add_macroeconomic_indicators(df, indicators: dict, start, end):
             "VIX"
         )
         df["VIX"] = vix_data.reindex(df.index, method="ffill")
+        print("LOG: Added volatility index (VIX) indicator. ")
 
     if "interest_rate" in indicators and indicators["interest_rate"]:
         ir_data = pdr.get_data_fred(
             indicators["interest_rate"], start=start, end=end
         ).rename(columns={indicators["interest_rate"]: "Interest Rate"})
         df["Interest Rate"] = ir_data.reindex(df.index, method="ffill")
+        print("LOG: Added interest rate indicator.")
 
     if "unemployment_rate" in indicators and indicators["unemployment_rate"]:
         ur_data = pdr.get_data_fred(
@@ -50,6 +52,7 @@ def add_macroeconomic_indicators(df, indicators: dict, start, end):
             columns={indicators["unemployment_rate"]: "Unemployment Rate"}
         )
         df["Unemployment Rate"] = ur_data.reindex(df.index, method="ffill")
+        print("LOG: Added unemployment rate indicator.")
 
     if "consumer_sentiment" in indicators and indicators["consumer_sentiment"]:
         cs_data = pdr.get_data_fred(
@@ -58,20 +61,22 @@ def add_macroeconomic_indicators(df, indicators: dict, start, end):
             columns={indicators["consumer_sentiment"]: "Consumer Sentiment"}
         )
         df["Consumer Sentiment"] = cs_data.reindex(df.index, method="ffill")
+        print("LOG: Added consumer sentiment indicator.")
 
     if "us_dollar_index" in indicators and indicators["us_dollar_index"]:
         usd_data = yf.download("DX-Y.NYB", start=start, end=end)[
             "Close"
         ].rename("US Dollar Index")
         df["US Dollar Index"] = usd_data.reindex(df.index, method="ffill")
+        print("LOG: Added US dollar index indicator.")
 
     df.fillna(method="bfill", inplace=True)
     return df
 
 
 def add_technical_indicators(df, indicators: dict):
+    print("LOG: Adding technical indicators.")
     # RSI
-
     if "rsi" in indicators:
         period = indicators["rsi"]["period"]
         average_type = indicators["rsi"]["average_type"]
@@ -121,6 +126,7 @@ def rsi(df, period=14, average_type="ema"):
 
     # Calculate the RSI and add it to the DataFrame
     df["RSI"] = 100 - (100 / (1 + RS))
+    print("LOG: Added RSI indicator.")
 
 
 def bollinger_bands(df, period=20, num_std_dev=2):
@@ -133,6 +139,7 @@ def bollinger_bands(df, period=20, num_std_dev=2):
     # Calculate the Upper and Lower Bollinger Bands
     df["Upper Band"] = df["Middle Band"] + (std_dev * num_std_dev)
     df["Lower Band"] = df["Middle Band"] - (std_dev * num_std_dev)
+    print("LOG: Added Bollinger Bands indicator.")
 
 
 def macd(df, fast_period=12, slow_period=26, signal_period=9):
@@ -145,11 +152,15 @@ def macd(df, fast_period=12, slow_period=26, signal_period=9):
 
     # Calculate the Signal line
     df["Signal Line"] = df["MACD"].ewm(span=signal_period, adjust=False).mean()
+    print("LOG: Added MACD indicator.")
 
 
 def emas(df, emas: List[int]):
     for ema in emas:
         df["Ema_" + str(ema)] = df["Close"].ewm(span=ema, adjust=False).mean()
+        print(
+            f"LOG: Added estimated moving average (EMA) for period of {ema}."
+        )
 
 
 def get_max_period(indicators):
@@ -175,11 +186,16 @@ def get_max_period(indicators):
 
 # Function to download and preprocess stock data
 def download_and_preprocess(ticker, start, end, indicators, dropna=True):
+    print("LOG: Downloading data from Yahoo Finance.")
     df = yf.download(ticker, start, end)
+    print("LOG: Download complete.")
     max_period = get_max_period(indicators)
     original_start = start
     if (end - start).days < max_period:
         start = end - dt.timedelta(days=max_period + 1)
+        print(
+            "LOG: Fetching extra data due to indicator periods longer than training period."
+        )
         df = yf.download(ticker, start, end)
     df = add_technical_indicators(df, indicators)
     df = add_macroeconomic_indicators(df, indicators, start, end)
@@ -192,6 +208,7 @@ def download_and_preprocess(ticker, start, end, indicators, dropna=True):
 
 
 def series_to_supervised(data, n_in=1, n_out=1, dropnan=True, keep_last=False):
+    print("LOG: Transforming dataset into series format.")
     n_vars = 1 if type(data) is list else data.shape[1]
     df = pd.DataFrame(data)
 
@@ -230,7 +247,11 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True, keep_last=False):
         last_row_df = pd.DataFrame([last_row], columns=agg.columns)
         if dropnan:
             agg.dropna(inplace=True)
+        # This is done so that we still keep the last row despite it containing na for 'Next Close'
+        # Since we need this row for the model to predict tomorrows price.
         agg = pd.concat([agg, last_row_df], ignore_index=True)
+    elif dropnan:
+        agg.dropna(inplace=True)
 
     # Separate features and labels
     n_obs = n_in * (n_vars - 1)

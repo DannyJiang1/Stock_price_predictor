@@ -1,0 +1,42 @@
+{
+    "indicators": {
+        "rsi": {
+            "period": 14,
+            "average_type": "ema"
+        },
+        "macd": {
+            "fast_period": 12,
+            "slow_period": 26,
+            "signal_period": 9
+        },
+        "emas": [
+            12,
+            16,
+            50,
+            200
+        ],
+        "vix": true,
+        "interest_rate": "EFFR",
+        "unemployment_rate": "UNRATE",
+        "consumer_sentiment": "UMCSENT",
+        "us_dollar_index": true
+    },
+    "feature_columns": [
+        "Close",
+        "Volume",
+        "RSI",
+        "MACD",
+        "Signal Line",
+        "EMA_12",
+        "EMA_16",
+        "EMA_50",
+        "EMA_200",
+        "VIX",
+        "Interest Rate",
+        "Unemployment Rate",
+        "Consumer Sentiment",
+        "US Dollar Index"
+    ],
+    "n_input": 5,
+    "n_obs": 75
+}
